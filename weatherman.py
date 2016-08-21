@@ -11,13 +11,28 @@ STACK_TYPE_MAP = {
     'python34': '64bit Amazon Linux 2015.03 v1.3.1 running Python 3.4',
     'python34_2.0.1': '64bit Amazon Linux 2015.03 v2.0.1 running Python 3.4',
     'python34_2.0.6': '64bit Amazon Linux 2015.09 v2.0.6 running Python 3.4',
+    'python34_2.1.3': '64bit Amazon Linux 2016.03 v2.1.3 running Python 3.4',
     'python34docker': '64bit Debian jessie v1.1.0 running '
                 'Python 3.4 (Preconfigured - Docker)',
-    'nodejs': '64bit Amazon Linux 2015.03 v1.3.1 running Node.js',
+    'nodejs_2.0.7': '64bit Amazon Linux 2015.09 v2.0.7 running Node.js',
+    'nodejs_2.1.1': '64bit Amazon Linux 2015.03 v2.1.1 running Node.js',
+    'nodejs_1.3.1': '64bit Amazon Linux 2016.03 v2.1.3 running Node.js',
 }
 
 
 def build_eb_cli_command(app, config, passthrough_args):
+
+    print(config)
+
+    """
+        Early return(s) as needed
+    """
+    # if there are public and private then throw error
+    if config.get('private_subnets') is not None \
+            and config.get('public_subnets') is not None:
+        raise ValueError('Application cannot be in both private and'
+                         'public subnets')
+
     ebargs = [
         'eb',
         'create',
@@ -35,26 +50,45 @@ def build_eb_cli_command(app, config, passthrough_args):
     if config.get('profile'):
         ebargs.append('--profile={}'.format(config.get('profile')))
 
+    # defined vpc
+    # default to .weathermanrc
+    # need more info
     if 'vpc_id' in config:
         ebargs.append('--vpc.id={}'.format(config.get('vpc_id')))
-        if config.get('elb_subnets'):
+
+        # additional security groups?
+        if config.get('security_groups') is not None:
+            ebargs.append(
+                '--vpc.securitygroups={}'.format(config.get('security_groups')))
+
+        # define elb subnets
+        if config.get('elb_subnets') is not None:
             ebargs.append(
                 '--vpc.elbsubnets={}'.format(config.get('elb_subnets')))
-        if config.get('assign_elb_public_ip'):
+
+        # elb public
+        if config.get('assign_elb_public_ip') is not None:
             ebargs.append('--vpc.elbpublic')
-            if 'public_subnets' in config:
-                if app.env == 'prod':
-                    ebargs.append(
-                        '--vpc.ec2subnets={}'.format(config.get('public_subnets')))
-                    ebargs.append('--vpc.publicip')
-                elif 'private_subnets' in config:
-                    ebargs.append('--vpc.ec2subnets={}'.format(
-                        config.get('private_subnets')))
-        elif 'private_subnets' in config:
+            # add to public subnets
+            if config.get('public_subnets') is not None:
+                ebargs.append(
+                    '--vpc.ec2subnets={}'.format(config.get('public_subnets')))
+                ebargs.append('--vpc.publicip')
+            # add to private subnets
+            if config.get('private_subnets') is not None:
+                ebargs.append('--vpc.ec2subnets={}'.format(
+                    config.get('private_subnets')))
+        # no elb
+        elif config.get('public_subnets') is not None:
+            ebargs.append('--vpc.ec2subnets={}'.format(
+                config.get('public_subnets')))
+        elif config.get('private_subnets') is not None:
             ebargs.append('--vpc.ec2subnets={}'.format(
                 config.get('private_subnets')))
-        if config.get('assign_public_ip'):
-            ebargs.append('--vpc.publicip')
+
+        # single instance
+        if config.get('single'):
+            ebargs.append('--single')
 
     if set(['-db', '--database']).intersection(set(passthrough_args)):
         ebargs.append(
@@ -103,7 +137,7 @@ class App(object):
         self.platform = platform
 
         # TODO: parse arg
-        self.region='us-east-1'
+        self.region = 'us-east-1'
 
 
 def main(config, passthrough_args=None):
@@ -114,9 +148,10 @@ def main(config, passthrough_args=None):
         STACK_TYPE_MAP[config.get('stack_type')]
     )
     command = build_eb_cli_command(app, config, passthrough_args)
-    if config['dry_run']:
-        print(list2cmdline(command))
-    else:
+
+    print(list2cmdline(command))  # man, I just like seeing the output
+
+    if not config['dry_run']:
         init_eb_environment(app)
         process = Popen(command)
         process.wait()
@@ -162,7 +197,7 @@ def get_parser():
                         help='Version identifier (e.g. 2 for dev2)')
     parser.add_argument(
         '--stack-type',
-        default='python34_2.0.6',
+        default='python34_2.1.3',
         help='Type of stack to create (currently python34, python34docker, '
         'or nodejs)',
     )
@@ -183,6 +218,11 @@ def get_parser():
         help='VPC id for instances',
     )
     parser.add_argument(
+        '--securitygroups',
+        help='Comma-sparated list of security group IDs or names. '
+             'Additional to EB-created secuirty group',
+    )
+    parser.add_argument(
         '--instance-type',
         default='t2.micro',
         help='Instance type (t2.micro, m3.medium, etc.)',
@@ -200,6 +240,11 @@ def get_parser():
         action='store_true',
         help='Assign public IP to EC2 instances. Default is False.'
              'Default "false"',
+    )
+    parser.add_argument(
+        '--single',
+        action='store_true',
+        help='Create single environment with no load balancer. Default is False.'
     )
     parser.add_argument(
         '--assign-elb-public-ip',
